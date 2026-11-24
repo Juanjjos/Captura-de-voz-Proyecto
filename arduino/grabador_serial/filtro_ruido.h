@@ -13,6 +13,9 @@
 #define FR_RELACION_VOZ     2.0f  // energia mic1/mic2 para considerar que hay voz
 #define FR_GANANCIA_GATE   0.25f  // volumen en silencios (0.25 = -12 dB)
 #define FR_GANANCIA         0.5f  // amplificacion final
+#define FR_CALIBRACION       25   // bloques iniciales sin asumir que hay voz (~400 ms)
+#define FR_ON_BLOQUES         3   // requiere voz en 3 bloques (~50 ms)
+#define FR_OFF_BLOQUES       20   // mantiene la voz 20 bloques sin voz (~320 ms)
 #define FR_MAX_BLOQUE       512
 #define FR_PI       3.14159265f
 
@@ -32,6 +35,10 @@ typedef struct {
   bool primer_bloque;
   float g;
   bool voz;
+  float rms1, rms2, relacion;
+  float piso_inicial;
+  int bloques_calibracion;
+  int contador_on, contador_off;
   float t1[FR_MAX_BLOQUE], t2[FR_MAX_BLOQUE];
 } fr_estado_t;
 
@@ -63,6 +70,7 @@ static inline void fr_iniciar(fr_estado_t *s, bool dos_mics) {
   fr_biquad_iniciar(&s->hp2, 0, FR_CORTE_BAJO, FR_FS);
   fr_biquad_iniciar(&s->lp2, 1, FR_CORTE_ALTO, FR_FS);
   s->primer_bloque = true;
+  s->bloques_calibracion = FR_CALIBRACION;
   s->g = 1.0f;
 }
 
@@ -88,15 +96,56 @@ static inline void fr_procesar(fr_estado_t *s, const float *m1, const float *m2,
     }
   }
   float rms1 = sqrtf(e1 / n);
+  float rms2 = dos ? sqrtf(e2 / n) : 0.0f;
+  s->rms1 = rms1;
+  s->rms2 = rms2;
+  s->relacion = rms2 > 1e-7f ? rms1 / rms2 : 0.0f;
 
-  // 2. Detector de voz
-  if (s->primer_bloque) { s->piso = rms1; s->primer_bloque = false; }
-  bool voz = dos ? (rms1 > 2.0f * s->piso && e1 > FR_RELACION_VOZ * e2)
-                 : (rms1 > 3.0f * s->piso);
-  if (!voz) s->piso = 0.9f * s->piso + 0.1f * rms1;
-  else      s->piso *= 1.005f;
-  s->voz = voz;
-  float objetivo = voz ? 1.0f : FR_GANANCIA_GATE;
+  // 2. Detector de voz con calibracion, histéresis y retencion de estado
+  if (s->primer_bloque) {
+    s->piso = rms1;
+    s->piso_inicial = rms1;
+    s->primer_bloque = false;
+  }
+
+  if (s->bloques_calibracion > 0) {
+    s->piso = 0.9f * s->piso + 0.1f * rms1;
+    s->bloques_calibracion--;
+  }
+
+  bool cumple_on = false;
+  bool cumple_off = false;
+  if (dos) {
+    cumple_on = rms1 > 1.8f * s->piso &&
+                s->relacion >= FR_RELACION_VOZ;
+    cumple_off = rms1 > 1.35f * s->piso &&
+                 s->relacion >= (FR_RELACION_VOZ * 0.75f);
+  } else {
+    cumple_on = rms1 > 3.0f * s->piso;
+    cumple_off = rms1 > 2.0f * s->piso;
+  }
+
+  if (s->bloques_calibracion <= 0) {
+    if (!s->voz) {
+      s->contador_on = cumple_on ? s->contador_on + 1 : 0;
+      s->contador_off = 0;
+      if (s->contador_on >= FR_ON_BLOQUES) {
+        s->voz = true;
+        s->contador_on = 0;
+      }
+    } else {
+      s->contador_off = cumple_off ? 0 : s->contador_off + 1;
+      s->contador_on = 0;
+      if (s->contador_off >= FR_OFF_BLOQUES) {
+        s->voz = false;
+        s->contador_off = 0;
+      }
+    }
+  }
+
+  // Solo el silencio valida y actualiza el piso de ruido.
+  if (!s->voz) s->piso = 0.92f * s->piso + 0.08f * rms1;
+  float objetivo = s->voz ? 1.0f : FR_GANANCIA_GATE;
 
   for (int i = 0; i < n; i++) {
     float salida = s->t1[i];
@@ -118,7 +167,7 @@ static inline void fr_procesar(fr_estado_t *s, const float *m1, const float *m2,
       for (int k = 0; k < FR_TAPS; k++) estimado += s->w[k] * v[k];
       float err = d - estimado;
 
-      if (!voz) {   // solo aprende cuando no hablas
+      if (!s->voz) {   // solo aprende cuando no hablas
         float paso = FR_MU * err / (FR_TAPS * s->pot_ref + 1e-10f);
         for (int k = 0; k < FR_TAPS; k++) s->w[k] += paso * v[k];
       }

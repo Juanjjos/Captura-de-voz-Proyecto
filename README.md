@@ -14,7 +14,8 @@ hardware y software. Los pines son los de la conexión documentada:
 ## Archivos
 
 - `arduino\prueba_microfonos\prueba_microfonos.ino`: prueba los dos micrófonos
-  en el Serial Plotter.
+  en vivo. Las líneas incluyen RMS de ambos canales, relación entre
+  micrófonos, piso de ruido, estado (`CALIBRANDO`, `VOZ` o `SILENCIO`) y picos.
 - `arduino\grabador_serial\grabador_serial.ino` y
   `arduino\grabador_serial\filtro_ruido.h`: prueba el filtro y envía audio
   estéreo por USB (original a la izquierda, filtrado a la derecha).

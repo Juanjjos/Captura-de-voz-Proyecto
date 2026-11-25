@@ -1,0 +1,23 @@
+{
+  "puerto": "COM3",
+  "dispositivo_salida": null,
+  "modo_ruido": "estereo",
+  "carpeta_estimulos": "estimulos",
+  "carpeta_resultados": "resultados",
+  "repeticiones": 5,
+  "orden_aleatorio": true,
+  "semilla_orden": 1,
+  "condiciones": [
+    {"nombre": "ruido_bajo",  "ganancia_ruido_db": -20, "descripcion": "objetivo ~50 dB junto al mic 1"},
+    {"nombre": "ruido_medio", "ganancia_ruido_db": -10, "descripcion": "objetivo ~60 dB junto al mic 1"},
+    {"nombre": "ruido_alto",  "ganancia_ruido_db": 0,   "descripcion": "objetivo ~70 dB junto al mic 1"}
+  ],
+  "montaje": {
+    "distancia_parlante_voz_a_mic1_cm": 10,
+    "distancia_parlante_ruido_a_mic1_cm": 100,
+    "separacion_mic1_mic2_cm": 10,
+    "volumen_windows_pct": 50,
+    "firmware": "experimento_esp32.ino con filtro_ruido.h (valores por defecto)",
+    "notas": ""
+  }
+}

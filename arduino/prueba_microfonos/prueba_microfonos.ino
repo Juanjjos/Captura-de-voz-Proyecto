@@ -30,14 +30,16 @@ void loop() {
   if (pares == 0) return;
 
   double suma1 = 0, suma2 = 0;
-  int pico1 = 0, pico2 = 0;
+  int32_t pico1 = 0, pico2 = 0;
   for (int i = 0; i < pares; i++) {
     int32_t v1 = buffer[2 * i] >> 8;
     int32_t v2 = buffer[2 * i + 1] >> 8;
     suma1 += v1;       // Mic 1 (izquierdo)
     suma2 += v2;       // Mic 2 (derecho)
-    if (abs(v1) > pico1) pico1 = abs(v1);
-    if (abs(v2) > pico2) pico2 = abs(v2);
+    int32_t abs1 = v1 < 0 ? -v1 : v1;
+    int32_t abs2 = v2 < 0 ? -v2 : v2;
+    if (abs1 > pico1) pico1 = abs1;
+    if (abs2 > pico2) pico2 = abs2;
     m1[i] = v1 / 8388608.0f;
     m2[i] = v2 / 8388608.0f;
   }
@@ -53,10 +55,10 @@ void loop() {
   fr_procesar(&estado, m1, m2, filtrada, original, pares);
 
   Serial.printf(
-    "Mic1_voz:%0.0f,Mic2_ruido:%0.0f,Relacion:%0.2f,Piso:%0.3f,Estado:%s,Pico1:%d,Pico2:%d\n",
-    sqrt(energia1 / pares), sqrt(energia2 / pares),
+    "Mic1_voz:%0.4f,Mic2_ruido:%0.4f,Relacion:%0.2f,Piso:%0.4f,Estado:%d,Pico1:%0.4f,Pico2:%0.4f\n",
+    sqrt(energia1 / pares) / 8388608.0, sqrt(energia2 / pares) / 8388608.0,
     estado.relacion, estado.piso,
-    estado.bloques_calibracion > 0 ? "CALIBRANDO" : (estado.voz ? "VOZ" : "SILENCIO"),
-    pico1, pico2
+    estado.muestras_calibracion > 0 ? 0 : (estado.voz ? 2 : 1),
+    pico1 / 8388608.0, pico2 / 8388608.0
   );
 }

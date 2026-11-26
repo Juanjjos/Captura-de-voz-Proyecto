@@ -15,16 +15,26 @@ def leer(nombre, canal=0):
 def snr(x, fs, ms=20):
     n = int(fs * ms / 1000)
     t = len(x) // n
-    e = np.sort(np.mean(x[: t * n].reshape(t, n) ** 2, axis=1)) + 1e-9
+    if t < 10:
+        raise ValueError("Se necesitan al menos 10 ventanas de audio para estimar la SNR")
+    e = np.sort(np.mean(x[: t * n].reshape(t, n) ** 2, axis=1))
     k = max(1, t // 10)
     p_voz, p_ruido = e[-k:].mean(), e[:k].mean()
-    return 10 * np.log10(max(p_voz - p_ruido, 1e-9) / p_ruido), p_ruido
+    if p_ruido < 1.0 or p_voz <= p_ruido:
+        return None, p_ruido
+    return 10 * np.log10((p_voz - p_ruido) / p_ruido), p_ruido
+
+
+def formato_db(valor):
+    return f"{valor:6.1f} dB" if valor is not None else "no estimable"
 
 
 def main():
     if len(sys.argv) == 3:
         fs, sin = leer(sys.argv[1])
-        _, con = leer(sys.argv[2])
+        fs_con, con = leer(sys.argv[2])
+        if fs != fs_con:
+            raise ValueError("Las grabaciones deben tener la misma frecuencia de muestreo")
         base = sys.argv[2].rsplit(".", 1)[0]
     elif len(sys.argv) == 2:
         fs, sin = leer(sys.argv[1], 0)
@@ -36,14 +46,20 @@ def main():
 
     snr_sin, ruido_sin = snr(sin, fs)
     snr_con, ruido_con = snr(con, fs)
-    print(f"SNR sin filtro : {snr_sin:6.1f} dB")
-    print(f"SNR con filtro : {snr_con:6.1f} dB")
-    print(f"Mejora         : {snr_con - snr_sin:6.1f} dB")
-    print(f"Reduccion del ruido de fondo: {10 * np.log10(ruido_sin / ruido_con):.1f} dB")
+    print(f"SNR aprox. sin filtro : {formato_db(snr_sin)}")
+    print(f"SNR aprox. con filtro : {formato_db(snr_con)}")
+    if snr_sin is not None and snr_con is not None:
+        print(f"Mejora                : {snr_con - snr_sin:6.1f} dB")
+    else:
+        print("Mejora                : no estimable (ruido muy bajo o tramos sin voz)")
+    if ruido_sin >= 1.0 and ruido_con >= 1.0:
+        print(f"Reduccion del ruido de fondo: {10 * np.log10(ruido_sin / ruido_con):.1f} dB")
+    else:
+        print("Reduccion del ruido de fondo: no estimable")
 
     fig, ejes = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
-    for eje, x, titulo in [(ejes[0], sin, f"Sin filtro (SNR {snr_sin:.1f} dB)"),
-                           (ejes[1], con, f"Con filtro (SNR {snr_con:.1f} dB)")]:
+    for eje, x, titulo in [(ejes[0], sin, f"Sin filtro (SNR {formato_db(snr_sin)})"),
+                           (ejes[1], con, f"Con filtro (SNR {formato_db(snr_con)})")]:
         eje.specgram(x, NFFT=512, Fs=fs, noverlap=384, cmap="magma")
         eje.set_title(titulo)
         eje.set_ylabel("Frecuencia (Hz)")

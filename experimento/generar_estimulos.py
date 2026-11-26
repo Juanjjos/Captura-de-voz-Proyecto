@@ -36,7 +36,9 @@ def a_rms(x, dbfs):
 
 
 def desvanecer(x, ms=50):
-    n = int(FS * ms / 1000)
+    n = min(int(FS * ms / 1000), len(x) // 2)
+    if n <= 0:
+        return x
     rampa = np.linspace(0, 1, n)
     x = x.copy()
     x[:n] *= rampa
@@ -47,6 +49,8 @@ def desvanecer(x, ms=50):
 def cargar_frase(ruta):
     fs, x = wavfile.read(ruta)
     x = x.astype(np.float64)
+    if x.size == 0:
+        raise ValueError(f"{ruta}: el archivo no contiene audio")
     if x.ndim == 2:
         x = x.mean(axis=1)
     x /= np.max(np.abs(x)) + 1e-12
@@ -54,8 +58,12 @@ def cargar_frase(ruta):
         g = np.gcd(int(fs), FS)
         x = resample_poly(x, FS // g, int(fs) // g)
     # recortar silencios del inicio y del final
+    if x.size < 480:
+        raise ValueError(f"{ruta}: la frase es demasiado corta para detectar voz")
     env = np.convolve(np.abs(x), np.ones(480) / 480, mode="same")
     activo = np.where(env > 0.02 * env.max())[0]
+    if len(activo) == 0:
+        raise ValueError(f"{ruta}: no se detecto voz en el archivo")
     x = x[max(activo[0] - 2400, 0): activo[-1] + 2400]
     return desvanecer(x, 20)
 
@@ -96,6 +104,8 @@ def main():
     p.add_argument("--semilla", type=int, default=1234)
     p.add_argument("--carpeta", default="estimulos")
     a = p.parse_args()
+    if a.inicio < 0 or a.final < 0:
+        p.error("--inicio y --final deben ser valores no negativos")
 
     if a.frase:
         voz, origen = cargar_frase(a.frase), os.path.basename(a.frase)

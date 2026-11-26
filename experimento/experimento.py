@@ -4,7 +4,7 @@ experimento.py - Comparacion experimental reproducible: filtro DESACTIVADO vs AC
 Mantiene fijos la frase, la posicion y el volumen del ruido:
   - La frase y el ruido salen siempre de los mismos archivos (generar_estimulos.py).
   - Los niveles se calibran con un sonometro y quedan registrados.
-  - El ESP32 (experimento_esp32.ino) entrega el MISMO sonido sin filtro y con filtro
+  - El ESP32 (experimento.ino) entrega el MISMO sonido sin filtro y con filtro
     a la vez, y el filtro se reinicia antes de cada toma.
   - Cada condicion se repite varias veces para medir la variacion.
 
@@ -12,7 +12,7 @@ Uso:
     python experimento.py config_experimento.json            # correr el experimento
     python experimento.py --analizar resultados/2026-11-25_1530  # volver a analizar
 
-Requisitos:  pip install pyserial numpy scipy matplotlib sounddevice
+Requisitos:  python -m pip install -r ..\\requirements.txt
 Cierra el Monitor Serie de Arduino antes de empezar.
 """
 import csv
@@ -38,22 +38,24 @@ APRENDIZAJE = 2.0    # s de ruido que se dejan para que el filtro se adapte
 
 # ------------------------------------------------------------------ captura
 def extraer_bloques(buf):
-    """Separa los bloques que envia el ESP32: 0xAA 0x55, cantidad, muestras."""
+    """Separa bloques con sync, cantidad, secuencia de 32 bits y muestras."""
     bloques = []
     while True:
         i = buf.find(b"\xaa\x55")
         if i < 0:
             return bloques, buf[-1:]
-        if len(buf) < i + 4:
+        if len(buf) < i + 8:
             return bloques, buf[i:]
         n = struct.unpack_from("<H", buf, i + 2)[0]
         if n == 0 or n > 512:
             buf = buf[i + 2:]
             continue
-        fin = i + 4 + n * 4
+        secuencia = struct.unpack_from("<I", buf, i + 4)[0]
+        fin = i + 8 + n * 4
         if len(buf) < fin:
             return bloques, buf[i:]
-        bloques.append(np.frombuffer(bytes(buf[i + 4:fin]), dtype="<i2").reshape(-1, 2))
+        muestras = np.frombuffer(bytes(buf[i + 8:fin]), dtype="<i2").reshape(-1, 2)
+        bloques.append((secuencia, muestras))
         buf = buf[fin:]
 
 
@@ -71,6 +73,10 @@ class Grabador:
 
     def iniciar(self):
         self.bloques, self.buf = [], bytearray()
+        self.bloques_perdidos = 0
+        self.bloques_duplicados = 0
+        self.bloques_fuera_orden = 0
+        self.secuencia_anterior = None
         self.parar = threading.Event()
         self.hilo = threading.Thread(target=self._leer, daemon=True)
         self.hilo.start()
@@ -81,7 +87,18 @@ class Grabador:
             if datos:
                 nuevos, resto = extraer_bloques(self.buf + datos)
                 self.buf = bytearray(resto)
-                self.bloques += nuevos
+                for secuencia, muestras in nuevos:
+                    if self.secuencia_anterior is not None:
+                        delta = (secuencia - self.secuencia_anterior) & 0xFFFFFFFF
+                        if delta == 0:
+                            self.bloques_duplicados += 1
+                            continue
+                        if delta >= 0x80000000:
+                            self.bloques_fuera_orden += 1
+                            continue
+                        self.bloques_perdidos += delta - 1
+                    self.secuencia_anterior = secuencia
+                    self.bloques.append(muestras)
 
     def detener(self):
         self.parar.set()
@@ -120,7 +137,10 @@ def medir(audio, info):
     res["mejora_db"] = res["snr_con_db"] - res["snr_sin_db"]
     res["reduccion_ruido_db"] = 10 * np.log10(res["_pn_sin"] / res["_pn_con"])
     res["cambio_voz_db"] = 10 * np.log10(res["_pv_con"] / res["_pv_sin"])
-    res["saturacion_pct"] = 100 * float(np.mean(np.abs(audio[:, 0].astype(int)) >= 32000))
+    for canal, nombre in ((0, "sin"), (1, "con")):
+        res[f"saturacion_{nombre}_pct"] = 100 * float(
+            np.mean(np.abs(audio[:, canal].astype(np.int32)) >= 32760)
+        )
     return {k: round(v, 2) for k, v in res.items() if not k.startswith("_")}
 
 
@@ -132,21 +152,26 @@ def analizar(carpeta):
     filas = []
     for toma in reg["tomas"]:
         fs, audio = wavfile.read(os.path.join(carpeta, "tomas", toma["archivo"]))
-        fila = {**toma, **medir(audio, info)}
+        fila = {**toma}
+        if toma.get("muestras_ok", True):
+            fila.update(medir(audio, info))
         fila["nivel_ruido_medido_db"] = reg["niveles_ruido_db"].get(toma["condicion"])
         fila["nivel_voz_medido_db"] = reg.get("nivel_voz_db")
         filas.append(fila)
 
     campos = ["orden", "condicion", "repeticion", "archivo", "fecha_hora",
               "nivel_voz_medido_db", "nivel_ruido_medido_db", "snr_sin_db", "snr_con_db",
-              "mejora_db", "reduccion_ruido_db", "cambio_voz_db", "saturacion_pct", "muestras_ok"]
+              "mejora_db", "reduccion_ruido_db", "cambio_voz_db",
+              "saturacion_sin_pct", "saturacion_con_pct", "bloques_perdidos",
+              "continuidad_usb_pct", "muestras_ok"]
     with open(os.path.join(carpeta, "mediciones.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=campos, extrasaction="ignore")
         w.writeheader()
         w.writerows(filas)
 
     resumen = resumir(filas, [c["nombre"] for c in reg["config"]["condiciones"]], reg, carpeta)
-    graficar(carpeta, reg, resumen, info)
+    if resumen:
+        graficar(carpeta, reg, resumen, info)
     return filas, resumen
 
 
@@ -154,7 +179,7 @@ def resumir(filas, condiciones, reg, carpeta):
     from scipy import stats
     resumen = []
     for cond in condiciones:
-        g = [f for f in filas if f["condicion"] == cond]
+        g = [f for f in filas if f["condicion"] == cond and f.get("muestras_ok", True)]
         if not g:
             continue
         sin = np.array([f["snr_sin_db"] for f in g])
@@ -179,6 +204,10 @@ def resumir(filas, condiciones, reg, carpeta):
             fila["mejora_ic95_db"] = f"{mej.mean() - ic:.2f} a {mej.mean() + ic:.2f}"
             fila["p_valor_pareado"] = float(f"{stats.ttest_rel(con, sin).pvalue:.2e}") if mej.std() > 0 else 0.0
         resumen.append(fila)
+
+    if not resumen:
+        print("No hay tomas válidas para calcular el resumen; revisa muestras_ok en mediciones.csv.")
+        return []
 
     campos = list(dict.fromkeys(k for r in resumen for k in r))
     with open(os.path.join(carpeta, "resumen.csv"), "w", newline="", encoding="utf-8") as f:
@@ -268,6 +297,8 @@ def correr(ruta_config):
     if info["inicio_voz_s"] < APRENDIZAJE + 0.6:
         sys.exit(f"inicio_voz_s debe ser al menos {APRENDIZAJE + 0.6} s (genera los estimulos con --inicio 4)")
 
+    if cfg.get("modo_ruido") not in ("estereo", "externo"):
+        sys.exit("modo_ruido debe ser 'estereo' o 'externo'")
     externo = cfg["modo_ruido"] == "externo"
     fs, estimulo = leer_wav_float(os.path.join(est, "estimulo_voz.wav" if externo else "estimulo_estereo.wav"))
     dispositivo = cfg.get("dispositivo_salida")
@@ -329,19 +360,33 @@ def correr(ruta_config):
             time.sleep(POST_GRAB)
             audio = grab.detener()
 
-            ok = len(audio) >= 0.97 * esperado
+            bloques_perdidos = grab.bloques_perdidos
+            continuidad_usb = 100.0 * len(grab.bloques) / max(
+                1, len(grab.bloques) + bloques_perdidos
+            )
+            ok = (
+                len(audio) >= 0.97 * esperado
+                and bloques_perdidos == 0
+                and grab.bloques_duplicados == 0
+                and grab.bloques_fuera_orden == 0
+            )
             audio = audio[:esperado]
             archivo = f"{orden:02d}_{c['nombre']}_rep{rep:02d}.wav"
             wavfile.write(os.path.join(carpeta, "tomas", archivo), FS_ESP32, audio)
             toma = {"orden": orden, "condicion": c["nombre"], "repeticion": rep, "archivo": archivo,
-                    "fecha_hora": datetime.datetime.now().isoformat(timespec="seconds"), "muestras_ok": ok}
+                    "fecha_hora": datetime.datetime.now().isoformat(timespec="seconds"),
+                    "muestras_ok": ok, "bloques_perdidos": bloques_perdidos,
+                    "bloques_duplicados": grab.bloques_duplicados,
+                    "bloques_fuera_orden": grab.bloques_fuera_orden,
+                    "continuidad_usb_pct": round(continuidad_usb, 4)}
             registro["tomas"].append(toma)
-            m = medir(audio, info) if len(audio) > 0 else {}
+            m = medir(audio, info) if ok else {}
             aviso = "" if ok else "  <- AVISO: faltaron datos, repite esta toma"
             print(f"[{orden:2d}/{len(tomas_plan)}] {c['nombre']:<14} rep {rep}: "
                   f"SNR sin {m.get('snr_sin_db', float('nan')):5.1f} dB | "
                   f"con {m.get('snr_con_db', float('nan')):5.1f} dB | "
-                  f"mejora {m.get('mejora_db', float('nan')):5.1f} dB{aviso}")
+                  f"mejora {m.get('mejora_db', float('nan')):5.1f} dB | "
+                  f"USB {continuidad_usb:.2f}%{aviso}")
             time.sleep(1.0)
     finally:
         grab.cerrar()

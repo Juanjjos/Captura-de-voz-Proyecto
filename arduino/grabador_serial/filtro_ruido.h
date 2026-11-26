@@ -7,15 +7,15 @@
 #define FR_FS            16000.0f // frecuencia de muestreo (Hz)
 #define FR_CORTE_BAJO      300.0f // Hz: elimina zumbidos graves
 #define FR_CORTE_ALTO     3400.0f // Hz: elimina siseos agudos
-#define FR_TAPS              64   // longitud del filtro adaptativo (4 ms)
+#define FR_TAPS             128   // longitud del filtro adaptativo (8 ms)
 #define FR_RETARDO           16   // retardo del mic 1 (1 ms)
-#define FR_MU              0.05f  // velocidad de aprendizaje
-#define FR_RELACION_VOZ     2.0f  // energia mic1/mic2 para considerar que hay voz
-#define FR_GANANCIA_GATE   0.25f  // volumen en silencios (0.25 = -12 dB)
+#define FR_MU              0.10f  // velocidad de aprendizaje NLMS
+#define FR_RELACION_VOZ     2.5f  // energia mic1/mic2 para considerar que hay voz
+#define FR_GANANCIA_GATE   0.05f  // nivel en silencios (-26 dB antes de ganancia final)
 #define FR_GANANCIA         0.5f  // amplificacion final
-#define FR_CALIBRACION       25   // bloques iniciales sin asumir que hay voz (~400 ms)
-#define FR_ON_BLOQUES         3   // requiere voz en 3 bloques (~50 ms)
-#define FR_OFF_BLOQUES       20   // mantiene la voz 20 bloques sin voz (~320 ms)
+#define FR_CALIBRACION_MS   400   // calibracion inicial sin asumir que hay voz
+#define FR_ON_MS             64   // persistencia minima para abrir la compuerta
+#define FR_OFF_MS           160   // retencion para no cortar entre silabas
 #define FR_MAX_BLOQUE       512
 #define FR_PI       3.14159265f
 
@@ -36,9 +36,8 @@ typedef struct {
   float g;
   bool voz;
   float rms1, rms2, relacion;
-  float piso_inicial;
-  int bloques_calibracion;
-  int contador_on, contador_off;
+  int muestras_calibracion;
+  int muestras_on, muestras_off;
   float t1[FR_MAX_BLOQUE], t2[FR_MAX_BLOQUE];
 } fr_estado_t;
 
@@ -70,7 +69,7 @@ static inline void fr_iniciar(fr_estado_t *s, bool dos_mics) {
   fr_biquad_iniciar(&s->hp2, 0, FR_CORTE_BAJO, FR_FS);
   fr_biquad_iniciar(&s->lp2, 1, FR_CORTE_ALTO, FR_FS);
   s->primer_bloque = true;
-  s->bloques_calibracion = FR_CALIBRACION;
+  s->muestras_calibracion = (int)(FR_FS * FR_CALIBRACION_MS / 1000.0f);
   s->g = 1.0f;
 }
 
@@ -78,6 +77,7 @@ static inline void fr_iniciar(fr_estado_t *s, bool dos_mics) {
 // filtrada: salida con reduccion de ruido, original: mic 1 sin filtrar
 static inline void fr_procesar(fr_estado_t *s, const float *m1, const float *m2,
                                float *filtrada, float *original, int n) {
+  if (!s || !m1 || n <= 0) return;
   if (n > FR_MAX_BLOQUE) n = FR_MAX_BLOQUE;
   bool dos = s->dos_mics && m2 != NULL;
 
@@ -99,18 +99,18 @@ static inline void fr_procesar(fr_estado_t *s, const float *m1, const float *m2,
   float rms2 = dos ? sqrtf(e2 / n) : 0.0f;
   s->rms1 = rms1;
   s->rms2 = rms2;
-  s->relacion = rms2 > 1e-7f ? rms1 / rms2 : 0.0f;
+  s->relacion = e2 > 1e-14f ? e1 / e2 : (e1 > 1e-14f ? 1e6f : 0.0f);
 
   // 2. Detector de voz con calibracion, histéresis y retencion de estado
   if (s->primer_bloque) {
     s->piso = rms1;
-    s->piso_inicial = rms1;
     s->primer_bloque = false;
   }
 
-  if (s->bloques_calibracion > 0) {
+  if (s->muestras_calibracion > 0) {
     s->piso = 0.9f * s->piso + 0.1f * rms1;
-    s->bloques_calibracion--;
+    s->muestras_calibracion -= n;
+    if (s->muestras_calibracion < 0) s->muestras_calibracion = 0;
   }
 
   bool cumple_on = false;
@@ -125,26 +125,31 @@ static inline void fr_procesar(fr_estado_t *s, const float *m1, const float *m2,
     cumple_off = rms1 > 2.0f * s->piso;
   }
 
-  if (s->bloques_calibracion <= 0) {
+  int umbral_on = (int)(FR_FS * FR_ON_MS / 1000.0f);
+  int umbral_off = (int)(FR_FS * FR_OFF_MS / 1000.0f);
+  if (s->muestras_calibracion <= 0) {
     if (!s->voz) {
-      s->contador_on = cumple_on ? s->contador_on + 1 : 0;
-      s->contador_off = 0;
-      if (s->contador_on >= FR_ON_BLOQUES) {
+      s->muestras_on = cumple_on ? s->muestras_on + n : 0;
+      s->muestras_off = 0;
+      if (s->muestras_on >= umbral_on) {
         s->voz = true;
-        s->contador_on = 0;
+        s->muestras_on = 0;
       }
     } else {
-      s->contador_off = cumple_off ? 0 : s->contador_off + 1;
-      s->contador_on = 0;
-      if (s->contador_off >= FR_OFF_BLOQUES) {
+      s->muestras_off = cumple_off ? 0 : s->muestras_off + n;
+      s->muestras_on = 0;
+      if (s->muestras_off >= umbral_off) {
         s->voz = false;
-        s->contador_off = 0;
+        s->muestras_off = 0;
       }
     }
+  } else {
+    s->muestras_on = 0;
+    s->muestras_off = 0;
   }
 
   // Solo el silencio valida y actualiza el piso de ruido.
-  if (!s->voz) s->piso = 0.92f * s->piso + 0.08f * rms1;
+  if (!s->voz && !cumple_on) s->piso = 0.92f * s->piso + 0.08f * rms1;
   float objetivo = s->voz ? 1.0f : FR_GANANCIA_GATE;
 
   for (int i = 0; i < n; i++) {
@@ -167,7 +172,7 @@ static inline void fr_procesar(fr_estado_t *s, const float *m1, const float *m2,
       for (int k = 0; k < FR_TAPS; k++) estimado += s->w[k] * v[k];
       float err = d - estimado;
 
-      if (!s->voz) {   // solo aprende cuando no hablas
+      if (!s->voz && !cumple_on) {   // no aprende sobre voz ni sus ataques
         float paso = FR_MU * err / (FR_TAPS * s->pot_ref + 1e-10f);
         for (int k = 0; k < FR_TAPS; k++) s->w[k] += paso * v[k];
       }
@@ -175,7 +180,8 @@ static inline void fr_procesar(fr_estado_t *s, const float *m1, const float *m2,
     }
 
     // 4. Compuerta de ruido con transicion suave
-    s->g += 0.002f * (objetivo - s->g);
+    float suavizado = objetivo > s->g ? 0.01f : 0.002f;
+    s->g += suavizado * (objetivo - s->g);
     if (filtrada) filtrada[i] = fr_limitar(salida * s->g * FR_GANANCIA);
   }
 }

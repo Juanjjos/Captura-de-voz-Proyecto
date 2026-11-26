@@ -1,5 +1,5 @@
 /*
-  EXPERIMENTO - Firmware de medicion (Arduino IDE)
+  EXPERIMENTO - Firmware de medicion (Arduino CLI)
   Sistema de Captura de Voz Inalambrica con Mitigacion de Ruido (ESP32)
 
   Envia al PC por USB, en cada instante, el MISMO sonido en dos versiones:
@@ -29,6 +29,7 @@ int32_t crudo[BLOQUE * 2];
 float m1[BLOQUE], m2[BLOQUE], filtrada[BLOQUE], original[BLOQUE];
 int16_t paquete[BLOQUE * 2];
 fr_estado_t estado;
+uint32_t secuencia = 0;
 
 void setup() {
   Serial.begin(921600);
@@ -60,12 +61,18 @@ void loop() {
   fr_procesar(&estado, m1, USAR_DOS_MICROFONOS ? m2 : NULL, filtrada, original, n);
   digitalWrite(PIN_LED, estado.voz ? HIGH : LOW);
 
-  // 3. Enviar al PC: cabecera 0xAA 0x55 + cantidad, y muestras de 16 bits
+  // 3. Enviar cabecera versionada con contador para detectar bloques perdidos.
   for (int i = 0; i < n; i++) {
     paquete[2 * i]     = (int16_t)(original[i] * 32767.0f);
     paquete[2 * i + 1] = (int16_t)(filtrada[i] * 32767.0f);
   }
-  uint8_t cabecera[4] = {0xAA, 0x55, (uint8_t)(n & 0xFF), (uint8_t)(n >> 8)};
-  Serial.write(cabecera, 4);
+  uint8_t cabecera[8] = {
+    0xAA, 0x55,
+    (uint8_t)(n & 0xFF), (uint8_t)(n >> 8),
+    (uint8_t)(secuencia & 0xFF), (uint8_t)((secuencia >> 8) & 0xFF),
+    (uint8_t)((secuencia >> 16) & 0xFF), (uint8_t)((secuencia >> 24) & 0xFF)
+  };
+  Serial.write(cabecera, sizeof(cabecera));
   Serial.write((uint8_t *)paquete, n * 4);
+  secuencia++;
 }

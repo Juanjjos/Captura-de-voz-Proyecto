@@ -1,0 +1,42 @@
+# Python environments and bytecode
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+
+# Local recordings and generated experiment outputs
+*.wav
+*_espectrogramas.png
+*_continuidad_usb.json
+*_evaluacion.json
+resultados_pruebas.csv
+experimento/estimulos/
+experimento/resultados/
+resultados/
+*.log
+
+# ESP-IDF / embedded build artifacts
+build/
+microfono_bt/sdkconfig
+microfono_bt/sdkconfig.old
+microfono_bt/managed_components/
+*.elf
+*.bin
+*.map
+
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+.secrets/
+credentials.json
+secrets.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Operating-system files
+.DS_Store
+Thumbs.db

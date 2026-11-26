@@ -5,13 +5,17 @@
 | Etapa | Qué se hace | Códigos | Entorno |
 | --- | --- | --- | --- |
 | 0 | Instalar el software | — | PC |
-| 1 | Verificar los micrófonos | 1 | Arduino IDE |
-| 2 | Probar el filtro por USB | 2 y 3 | Arduino IDE |
+| 1 | Verificar los micrófonos | `prueba_microfonos` | VS Code + Arduino CLI |
+| 2 | Probar el filtro por USB | `grabador_serial` | VS Code + Arduino CLI |
 | 3 | Grabar y medir en el PC | 4 y 5 | Python |
 | 4 | Cargar el firmware Bluetooth | 2, 6 y 7 | VS Code + ESP-IDF |
 | 5 | Conectar al PC y grabar por Bluetooth | — | Windows + Audacity |
 | 6 | Pruebas finales | 5 | Python |
 
+> **Fuentes ejecutables:** usa los archivos del repositorio indicados en cada
+> etapa. Los bloques “Código 1–7” de esta guía son versiones de referencia
+> anteriores y no incluyen todas las correcciones actuales; no los copies
+> encima de los archivos fuente.
 
 ## Etapa 0: Instalar el software
 
@@ -23,20 +27,29 @@ Todo es gratuito. Los pasos son para Windows.
 2. En Puertos (COM y LPT) debe aparecer "CP210x" o "CH340" con un número COM. Anótalo.
 3. Si no aparece o tiene un signo de advertencia, instala el driver del chip de tu placa: CP210x (Silicon Labs) o CH340 (WCH). Reinicia el PC y revisa de nuevo.
 
-**0.2 Arduino IDE 2 y el paquete ESP32**
+**0.2 Arduino CLI y el paquete ESP32**
 
-1. Descarga Arduino IDE 2 desde arduino.cc/en/software e instálalo. Acepta los drivers que proponga.
-2. Abre Archivo → Preferencias. En "Gestor de URLs adicionales de tarjetas" pega: `https://espressif.github.io/arduino-esp32/package_esp32_index.json`
-3. Abre Herramientas → Placa → Gestor de tarjetas, busca **esp32** e instala **esp32 by Espressif Systems**, versión **3.x**.
-4. En Herramientas → Placa elige **ESP32 Dev Module**. En Herramientas → Puerto elige tu COM.
+Arduino IDE no es necesario. Instala Arduino CLI desde la documentación oficial de Arduino y asegúrate de que `arduino-cli` se pueda ejecutar en la terminal integrada de VS Code. Luego ejecuta:
+
+```
+arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+arduino-cli core update-index
+arduino-cli core install esp32:esp32
+arduino-cli core list
+arduino-cli board list
+```
+
+Confirma que `esp32:esp32` esté instalado y que la versión sea 3.x. La placa de esta práctica es `esp32:esp32:esp32` (ESP32 Dev Module). Si la descarga se interrumpe, vuelve a ejecutar `arduino-cli core install esp32:esp32` hasta que finalice.
 
 **0.3 Python y sus librerías**
 
 1. Descarga Python 3 desde python.org e instálalo. En la primera pantalla marca **"Add python.exe to PATH"**.
 2. Abre la terminal (tecla Windows, escribe `cmd`, Enter) y ejecuta:
 
+Desde la raíz del repositorio ejecuta:
+
 ```
-pip install pyserial numpy scipy matplotlib
+python -m pip install -r requirements.txt
 ```
 
 3. Comprueba con `python --version`: debe mostrar Python 3.
@@ -59,7 +72,7 @@ Los códigos ya están dentro de esta carpeta del repositorio. Puedes trabajar d
 **Verificación de la Etapa 0**
 
 - [ ] El ESP32 aparece como puerto COM y anotaste el número.
-- [ ] Arduino IDE tiene instalado esp32 3.x y "ESP32 Dev Module" seleccionado.
+- [ ] Arduino CLI muestra el core esp32 3.x y `arduino-cli board list` detecta la placa.
 - [ ] `python --version` responde y `pip install` terminó sin errores.
 - [ ] Audacity abre.
 - [ ] ESP-IDF quedó instalado en VS Code (puede esperar hasta la Etapa 4).
@@ -70,10 +83,10 @@ Esta etapa confirma que el cableado funciona: cada micrófono debe responder en 
 
 **1.1 Crear el programa**
 
-1. En Arduino IDE: Archivo → Abrir y selecciona `arduino\prueba_microfonos\prueba_microfonos.ino` en esta carpeta del proyecto.
+1. Abre VS Code en la raíz del repositorio y ejecuta los comandos de Arduino CLI indicados abajo.
 2. No es necesario volver a copiar el código 1: el sketch ya está guardado en el archivo.
 
-**Código 1: `prueba_microfonos.ino`**
+**Código 1 (referencia antigua): fuente actual `arduino\prueba_microfonos\prueba_microfonos.ino`**
 
 ```cpp
 #include <ESP_I2S.h>
@@ -122,22 +135,32 @@ void loop() {
 
 **1.2 Subirlo al ESP32**
 
-1. Conecta el ESP32 por USB. Revisa que Placa = ESP32 Dev Module y Puerto = tu COM.
-2. Clic en **Subir** (flecha →).
-3. Si se queda en `Connecting.....`, mantén presionado el botón **BOOT** del ESP32 hasta que avance el porcentaje.
-4. Espera el mensaje "Hard resetting via RTS pin...".
+1. Conecta el ESP32 por USB y consulta el puerto con `arduino-cli board list`.
+2. Desde la raíz del repositorio compila y sube (reemplaza `COM3` por tu puerto):
+
+   ```
+   arduino-cli compile --fqbn esp32:esp32:esp32 .\arduino\prueba_microfonos
+   arduino-cli upload -p COM3 --fqbn esp32:esp32:esp32 .\arduino\prueba_microfonos
+   ```
+
+3. Si se queda en `Connecting.....`, mantén presionado **BOOT** hasta que avance.
 
 **1.3 Probar**
 
-1. Herramientas → Serial Plotter, velocidad **115200**.
-2. Haz estas pruebas:
+1. En VS Code ejecuta `arduino-cli monitor -p COM3 -c baudrate=115200` (cambia el COM).
+2. Las líneas muestran niveles RMS/picos normalizados; `Estado:0` es calibración,
+   `Estado:1` silencio y `Estado:2` voz. La escala completa es 1.0.
+3. Haz estas pruebas:
 
 | Prueba | Resultado correcto |
 | --- | --- |
-| Silencio | Dos líneas bajas y estables |
-| Hablar o soplar cerca del micrófono 1 | Sube mucho más Mic1\_voz |
-| Hablar o soplar cerca del micrófono 2 | Sube mucho más Mic2\_ruido |
+| Silencio | Dos valores RMS bajos y estables; termina la calibración |
+| Hablar cerca del micrófono 1 | Sube `Mic1_voz`; detector cambia a `Estado:2` |
+| Hablar cerca del micrófono 2 | Sube `Mic2_ruido`; no debe confundirse con voz principal |
 | Aplaudir lejos de ambos | Suben las dos parecido |
+
+Sal del monitor con `Ctrl+C` antes de compilar/subir otro sketch. La prueba
+emite datos numéricos para poder verlos también en un Serial Plotter.
 
 **Verificación de la Etapa 1**
 
@@ -149,12 +172,19 @@ void loop() {
 
 El ESP32 filtra el ruido y envía al PC, por el cable USB, dos canales a la vez: el izquierdo es el audio original y el derecho el filtrado. Así se comparan con exactamente el mismo sonido.
 
+La implementación actual está en `arduino\grabador_serial\filtro_ruido.h` y
+es compartida con Bluetooth. La compuerta reduce más el nivel cuando no detecta
+voz y exige que el sonido cumpla el detector durante 64 ms; esto ayuda con
+golpes breves, pero no puede separar perfectamente dos sonidos simultáneos que
+llegan casi igual a ambos micrófonos. Para comparar, graba primero silencio,
+luego golpes sobre la mesa y finalmente voz cerca del micrófono 1.
+
 **2.1 Crear el programa con sus dos archivos**
 
-1. En Arduino IDE: Archivo → Abrir y selecciona `arduino\grabador_serial\grabador_serial.ino` en esta carpeta del proyecto.
+1. El sketch está en `arduino\grabador_serial\grabador_serial.ino`.
 2. El archivo `filtro_ruido.h` ya está en la misma carpeta del sketch; no es necesario volver a crear la pestaña ni copiar el código.
 
-**Código 2: `filtro_ruido.h`** (el filtro; también lo usa el código 6)
+**Código 2 (referencia antigua): fuente actual `arduino\grabador_serial\filtro_ruido.h`**
 
 ```c
 #pragma once
@@ -291,7 +321,7 @@ static inline void fr_procesar(fr_estado_t *s, const float *m1, const float *m2,
 }
 ```
 
-**Código 3: `grabador_serial.ino`**
+**Código 3 (referencia antigua): fuente actual `arduino\grabador_serial\grabador_serial.ino`**
 
 ```cpp
 #include <ESP_I2S.h>
@@ -360,7 +390,7 @@ El código 4 graba lo que envía el ESP32 y el código 5 calcula cuánto ruido q
 
 Los archivos `grabar_audio.py` y `analizar_snr.py` ya están en la carpeta principal del proyecto. Abre una terminal en esa carpeta para ejecutar los comandos de las secciones siguientes.
 
-**Código 4: `grabar_audio.py`**
+**Código 4 (referencia antigua): fuente actual `grabar_audio.py`**
 
 ```python
 import struct
@@ -439,7 +469,7 @@ if __name__ == "__main__":
     main()
 ```
 
-**Código 5: `analizar_snr.py`**
+**Código 5 (referencia antigua): fuente actual `analizar_snr.py`**
 
 ```python
 import sys
@@ -506,7 +536,7 @@ if __name__ == "__main__":
 **3.2 Grabar una prueba**
 
 1. Ten el código 3 cargado en el ESP32 y el Monitor Serie de Arduino cerrado.
-2. Abre una terminal en la carpeta principal del repositorio (la que contiene `grabar_audio.py`). Si copiaste el repositorio a `C:\proyecto_voz`, entra con `cd /d C:\proyecto_voz`.
+2. Abre PowerShell en la carpeta principal del repositorio (la que contiene `grabar_audio.py`). Si copiaste el repositorio a `C:\proyecto_voz`, entra con `Set-Location C:\proyecto_voz`.
 3. Pon una fuente de ruido a volumen fijo, por ejemplo un celular con ruido blanco a 1 m.
 4. Ejecuta, cambiando COM3 por tu puerto:
 
@@ -515,7 +545,7 @@ python grabar_audio.py COM3 15 prueba1.wav
 ```
 
 5. Durante los primeros **3 segundos no hables** (solo ruido). Luego lee una frase fija durante unos 10 segundos.
-6. Al terminar se crean `prueba1.wav` (estéreo), `prueba1_original.wav` y `prueba1_filtrada.wav`. Escúchalos en Audacity.
+6. Al terminar se crean `prueba1.wav` (estéreo), `prueba1_original.wav`, `prueba1_filtrada.wav` y `prueba1_continuidad_usb.json`. El JSON informa la continuidad USB usando el número de secuencia de cada bloque. Escucha los WAV en Audacity.
 
 **3.3 Medir**
 
@@ -523,13 +553,19 @@ python grabar_audio.py COM3 15 prueba1.wav
 python analizar_snr.py prueba1.wav
 ```
 
-Muestra la SNR sin filtro, con filtro y la mejora en dB, y guarda `prueba1_espectrogramas.png`. Con filtro, el fondo del espectrograma debe verse más oscuro en las pausas.
+Muestra una estimación de SNR y guarda `prueba1_espectrogramas.png`; úsala solo como referencia porque los segmentos casi silenciosos pueden inflar el resultado. Para medir saturación del WAV ejecuta:
+
+```
+python evaluar_prueba.py prueba1.wav
+```
+
+El analizador guarda un JSON con duración y porcentaje de muestras cercanas al máximo digital. Si la saturación no es baja, reduce la ganancia antes de comparar calidad.
 
 **Verificación de la Etapa 3**
 
 - [ ] La grabación dura lo pedido y se oye tu voz.
 - [ ] La versión filtrada tiene menos ruido de fondo al escucharla.
-- [ ] La mejora de SNR es positiva. Anota el resultado: es tu primera evidencia.
+- [ ] Se guardaron duración, saturación y continuidad USB junto con la captura. Usa SNR solo como métrica secundaria.
 - [ ] Si la voz filtrada suena cortada al inicio de las palabras, baja `FR_RELACION_VOZ`. Si suena saturada, baja `FR_GANANCIA` a 4.0. Después de cambiar el código 2, vuelve a subir el código 3.
 
 ## Etapa 4: Firmware Bluetooth en ESP-IDF (códigos 2, 6 y 7)
@@ -552,7 +588,7 @@ microfono_bt\
 
 Abre `microfono_bt` como carpeta del proyecto en VS Code; no hace falta volver a crear ni copiar estos archivos. Hay dos archivos llamados `CMakeLists.txt` con contenido distinto: uno en la carpeta principal y otro dentro de `main`.
 
-**Código 7a: `CMakeLists.txt` (carpeta principal)**
+**Código 7a (referencia): fuente `microfono_bt\CMakeLists.txt`**
 
 ```cmake
 cmake_minimum_required(VERSION 3.16)
@@ -560,14 +596,14 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(microfono_bt)
 ```
 
-**Código 7b: `main\CMakeLists.txt`**
+**Código 7b (referencia antigua): fuente actual `microfono_bt\main\CMakeLists.txt`**
 
 ```cmake
 idf_component_register(SRCS "main.c"
                        INCLUDE_DIRS ".")
 ```
 
-**Código 7c: `sdkconfig.defaults`**
+**Código 7c (referencia): fuente `microfono_bt\sdkconfig.defaults`**
 
 ```
 CONFIG_BT_ENABLED=y
@@ -585,7 +621,7 @@ CONFIG_BTDM_CTRL_BR_EDR_MAX_SYNC_CONN=1
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 ```
 
-**Código 6: `main\main.c`**
+**Código 6 (referencia antigua): fuente actual `microfono_bt\main\main.c`**
 
 ```c
 #include <string.h>
@@ -868,11 +904,17 @@ Panel de control de sonido (Win+R → `mmsys.cpl`) → Grabar → micrófono de 
 python analizar_snr.py bt_sin_filtro.wav bt_con_filtro.wav
 ```
 
+Para registrar niveles de saturación, continuidad de la sesión y alcance, guarda
+el log ESP-IDF durante la prueba y ejecuta `evaluar_prueba.py` con el WAV
+Bluetooth. El reporte de SNR anterior es aproximado y no debe usarse como único
+resultado.
+
 **Verificación de la Etapa 5**
 
 - [ ] MicESP32 aparece emparejado y como micrófono en Windows.
 - [ ] Audacity graba tu voz por Bluetooth.
-- [ ] Con el filtro activo, el ruido de fondo se oye menor y la SNR mejora.
+- [ ] Se guarda el WAV y el log con estado de conexión, saturación y underflows.
+- [ ] La comparación con/sin filtro se realiza con el mismo procedimiento y se reportan métricas repetibles.
 
 ## Etapa 6: Pruebas finales
 
@@ -882,7 +924,7 @@ Estas pruebas demuestran que el proyecto cumple su objetivo. Mantén siempre la 
 
 1. Mide el nivel de ruido con una app de sonómetro en el celular, junto al micrófono 1.
 2. Para cada fila de la tabla: graba sin y con filtro (Etapa 3 por USB o Etapa 5 por Bluetooth) y mide con el código 5.
-3. Anota los resultados aquí mismo:
+3. Anota los resultados aquí mismo y conserva los informes JSON de cada captura; no uses la SNR como única evidencia.
 
 | Prueba | Tipo de ruido | Nivel de ruido (dB) | Distancia boca-mic 1 (cm) | Vía | SNR sin filtro (dB) | SNR con filtro (dB) | Mejora (dB) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -900,24 +942,46 @@ Estas pruebas demuestran que el proyecto cumple su objetivo. Mantén siempre la 
 
 **6.3 Alcance**
 
-Graba en Audacity mientras te alejas del PC con el ESP32. Anota la distancia a la que el audio empieza a cortarse.
+1. Repite una grabación de 30 s a distancias medidas (por ejemplo 1, 2 y 3 m), con línea de vista y el mismo volumen. Haz tres repeticiones por distancia.
+2. Para cada repetición guarda el WAV de Audacity y el log del monitor ESP-IDF en archivos separados. Reinicia el ESP32 antes de cada repetición para que los contadores acumulados se puedan comparar.
+3. Guarda los WAV y logs dentro de `microfono_bt` y, desde la raíz del
+   repositorio, ejecuta el análisis con la distancia real en metros:
+
+   ```
+   python .\evaluar_prueba.py .\microfono_bt\bt_1m.wav --distance-m 1 --firmware-log .\microfono_bt\bt_1m.log
+   ```
+
+4. Reporta la mayor distancia en la que las tres pruebas terminaron sin desconexión ni cortes audibles. El firmware informa pérdidas locales de cola y bytes HFP rellenados con silencio; no mide directamente paquetes perdidos por radio.
 
 **6.4 Latencia**
 
-Con "Escuchar este dispositivo" activado, aplaude cerca del micrófono y graba al mismo tiempo con el micrófono del PC. En Audacity mide el tiempo entre el aplauso real y el que llega por Bluetooth.
+Graba simultáneamente el mismo sonido de prueba en una pista de referencia y en la entrada Bluetooth. Alinea ambas capturas al mismo inicio y expórtalas como WAV PCM de 16 bits dentro de `microfono_bt`. Desde la raíz del repositorio, calcula el retardo relativo:
 
-**6.5 Estabilidad**
+```
+python .\evaluar_prueba.py .\microfono_bt\bt.wav --referencia .\microfono_bt\referencia.wav
+```
+
+Un retardo positivo indica que Bluetooth llega después de la referencia. La medida incluye el retardo de la ruta de referencia; usa el mismo montaje en todas las repeticiones. Una correlación baja significa que las pistas no se parecen lo suficiente y no debe reportarse la latencia.
+
+**6.5 Saturación y continuidad**
+
+- Para el WAV de una prueba, ejecuta desde la raíz `python .\evaluar_prueba.py .\captura.wav`. El porcentaje cercano al máximo digital debe ser bajo.
+- Por USB, `grabar_audio.py` detecta bloques faltantes en su número de secuencia y guarda la continuidad en `*_continuidad_usb.json`.
+- Por Bluetooth, el monitor ESP-IDF imprime `METRICAS` cada segundo: saturación I2S/salida, errores I2S, bytes descartados por la cola, bytes HFP rellenados con silencio y estado de conexión. Guarda el log por separado por prueba y pásalo con `--firmware-log`.
+- Los bytes HFP rellenados con silencio indican falta de audio en la cola local; no son una medida directa de pérdidas de radio.
+
+**6.6 Estabilidad**
 
 Deja el sistema grabando 30 minutos. No debe reiniciarse ni desconectarse; revísalo en el monitor de VS Code.
 
 **Lista final: proyecto funcionando**
 
 - [ ] Los dos micrófonos responden (Etapa 1).
-- [ ] El filtro mejora la SNR por USB (Etapa 3).
+- [ ] La captura USB tiene continuidad reportada y saturación baja (Etapa 3).
 - [ ] El ESP32 se empareja y transmite por Bluetooth (Etapa 5).
-- [ ] La SNR mejora también por Bluetooth (Etapa 5).
+- [ ] La captura Bluetooth tiene métricas de conexión/cola y saturación documentadas (Etapa 5).
 - [ ] Tabla 6.1 completa, con espectrogramas guardados.
-- [ ] Pruebas de inteligibilidad, alcance, latencia y estabilidad anotadas.
+- [ ] Pruebas de inteligibilidad, alcance, latencia y estabilidad anotadas y repetibles.
 
 ## Solución de problemas
 
@@ -931,8 +995,9 @@ Deja el sistema grabando 30 minutos. No debe reiniciarse ni desconectarse; reví
 | `filtro_ruido.h: No such file` | 2, 4 | El archivo debe estar en la misma carpeta que el `.ino`, o en `main` en ESP-IDF, con el nombre exacto |
 | "No llegan datos" en `grabar_audio.py` | 3 | Revisa el número de COM y que el código 3 esté cargado |
 | `python` o `pip` no se reconoce | 0, 3 | Reinstala Python marcando "Add python.exe to PATH" |
-| La voz filtrada se corta al inicio de las palabras | 3, 5 | Baja `FR_RELACION_VOZ` a 1.5 o sube `FR_GANANCIA_GATE` a 0.4 |
-| La voz filtrada suena saturada | 3, 5 | Baja `FR_GANANCIA` a 4.0 |
+| La voz filtrada se corta al inicio de las palabras | 3, 5 | En `arduino\grabador_serial\filtro_ruido.h`, baja `FR_RELACION_VOZ` gradualmente (por ejemplo, de 2.5 a 2.0) o `FR_ON_MS` (de 64 a 48); esto puede dejar pasar más ruido |
+| Sigue pasando mucho ruido durante el silencio | 3, 5 | Si `Estado` indica silencio, prueba bajar `FR_GANANCIA_GATE` de 0.05 a 0.02. Si los golpes activan voz, sube `FR_RELACION_VOZ` o `FR_ON_MS` gradualmente; comprueba que la voz cercana aún se detecte |
+| La voz filtrada suena saturada | 3, 5 | Baja `FR_GANANCIA` gradualmente (por ejemplo, de 0.5 a 0.35) |
 | Error de compilación en ESP-IDF sobre Bluetooth o HFP | 4 | Borra `sdkconfig` y `build`, compila de nuevo y revisa menuconfig (4.2). Si sigue, copia el error completo y pídeme la corrección |
 | MicESP32 no aparece al buscar | 5 | Revisa que el monitor diga "Listo" y reinicia el ESP32 con el botón EN |
 | Emparejado, pero no aparece como micrófono | 5 | Panel de control → Dispositivos e impresoras → MicESP32 → Propiedades → Servicios: marca "Telefonía manos libres". Si no, quita el dispositivo y empareja de nuevo |
